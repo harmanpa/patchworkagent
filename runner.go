@@ -184,7 +184,11 @@ func ExpandContext(dirpath string, context CalculationContext) error {
 }
 
 func ExpandContextFile(dirpath string, name string, content interface{}) error {
-	if !HandleAsArtefact(dirpath, name, content) {
+	isArtefact, err := HandleAsArtefact(dirpath, name, content)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if !isArtefact {
 		raw, err := json.Marshal(content)
 		if err != nil {
 			return errors.WithStack(err)
@@ -297,16 +301,19 @@ func MakeArtefact(path string) (Artefact, error) {
 	}, nil
 }
 
-func HandleAsArtefact(dirpath string, name string, content interface{}) bool {
+func HandleAsArtefact(dirpath string, name string, content interface{}) (bool, error) {
 	toexpand := content.(map[string]interface{})
 	if toexpand["name"] != nil && toexpand["uri"] != nil && toexpand["contentType"] != nil {
-		ReadArtefact(dirpath, name, Artefact{
+		err := ReadArtefact(dirpath, name, Artefact{
 			Name:        toexpand["name"].(string),
 			ContentType: toexpand["contentType"].(string),
 			URI:         toexpand["uri"].(string),
 		})
+		if err != nil {
+			return false, errors.WithStack(err)
+		}
 	}
-	return false
+	return false, nil
 }
 
 func ReadArtefact(dirpath string, name string, artefact Artefact) error {
