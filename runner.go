@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"flag"
+	"github.com/pkg/errors"
 	"io"
 	"io/ioutil"
 	"log"
@@ -50,11 +51,12 @@ type CalculationResponse struct {
 }
 
 func main() {
+	log.SetFlags(0)
 	log.Println("Patchwork Calculation Agent")
 	// Get the current directory
 	dirpath, err := os.Getwd()
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 	log.Println("Running in " + dirpath)
 	// Define the command line flags
@@ -64,53 +66,72 @@ func main() {
 	flag.Parse()
 	log.Println("Calculation command is " + *cmdPtr)
 	if len(*cmdPtr) == 0 {
-		panic("No command provided")
+		log.Fatal("No command provided")
 	}
 	args := flag.Args()
 	if len(args) > 0 {
 		// The calculation has been passed via the CLI
 		//if len(*tokenPtr) == 0 {
-		//	panic("No token provided")
+		//	log.Fatal("No token provided")
 		//}
 		if len(*hostPtr) == 0 {
-			panic("No host provided")
+			log.Fatal("No host provided")
 		}
-		RunCalculation(*cmdPtr, *hostPtr, *tokenPtr, args[0], dirpath)
+		err = RunCalculation(*cmdPtr, *hostPtr, *tokenPtr, args[0], dirpath)
+		if err != nil {
+			log.Fatal(err)
+		}
 	} else {
 		// The calculation will be passed via HTTP
-		Server(*cmdPtr, *hostPtr, *tokenPtr, dirpath)
+		err = Server(*cmdPtr, *hostPtr, *tokenPtr, dirpath)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 }
 
-func Server(command string, host string, token string, dirpath string) {
+func Server(command string, host string, token string, dirpath string) error {
 	http.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
 		if "POST" == strings.ToUpper(request.Method) {
 			// TODO: This should handle some different structures: Google Pubsub, or just a string etc
 			// RunCalculation()
 			payload := StreamToString(request.Body)
+			var err error
 			if strings.HasPrefix(payload, "{") {
 				var calc CalculationPayload
 				json.Unmarshal(StringToBytes(payload), &calc)
-				RunCalculation(command, calc.Host, calc.Token, calc.Id, dirpath)
+				err = RunCalculation(command, calc.Host, calc.Token, calc.Id, dirpath)
 			} else {
-				RunCalculation(command, host, token, payload, dirpath)
+				err = RunCalculation(command, host, token, payload, dirpath)
 			}
-			writer.WriteHeader(200)
+			if err != nil {
+				log.Println(err)
+				writer.WriteHeader(500)
+			} else {
+				writer.WriteHeader(200)
+			}
 		} else {
 			writer.WriteHeader(404)
 		}
 	})
 	log.Println("Starting server on port 8080")
-	http.ListenAndServe(":8080", nil)
+	err := http.ListenAndServe(":8080", nil)
+	return errors.WithStack(err)
 }
 
-func RunCalculation(command string, host string, token string, calculation string, dirpath string) {
+func RunCalculation(command string, host string, token string, calculation string, dirpath string) error {
 	log.Println("Preparing calculation " + calculation)
 	// Get all the data from the server about this calculation
-	context := GetContext(host, token, calculation)
+	context, err := GetContext(host, token, calculation)
+	if err != nil {
+		return errors.WithStack(err)
+	}
 
 	// Write the inputs to files in the working directory
-	ExpandContext(dirpath, context)
+	err = ExpandContext(dirpath, context)
+	if err != nil {
+		return errors.WithStack(err)
+	}
 
 	// Get a timestamp before running the calculation
 	t := time.Now()
@@ -125,49 +146,53 @@ func RunCalculation(command string, host string, token string, calculation strin
 	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 
 	// Run the command
-	err := cmd.Run()
+	err = cmd.Run()
 	if err != nil {
 		stderrBuf.WriteString(err.Error())
 	}
 	outStr, errStr := string(stdoutBuf.Bytes()), string(stderrBuf.Bytes())
 
 	// Find all files changed during the task and package them to return to server
-	response := PackageResult(dirpath, t, outStr, errStr)
+	response, err := PackageResult(dirpath, t, outStr, errStr)
+	if err != nil {
+		return errors.WithStack(err)
+	}
 
 	// Send the data to the server
-	SendResult(host, token, calculation, response)
+	err = SendResult(host, token, calculation, response)
+	return errors.WithStack(err)
 }
 
-func GetContext(host string, token string, calculation string) CalculationContext {
+func GetContext(host string, token string, calculation string) (CalculationContext, error) {
 	resp, err := http.Get(host + "/api/calculations/remote/" + calculation)
-	if err != nil {
-		panic(err)
-	}
 	var dat CalculationContext
-	err = json.Unmarshal(StreamToBytes(resp.Body), &dat)
 	if err != nil {
-		panic(err)
+		return dat, errors.WithStack(err)
 	}
-	return dat
+	err = json.Unmarshal(StreamToBytes(resp.Body), &dat)
+	return dat, errors.WithStack(err)
 }
 
-func ExpandContext(dirpath string, context CalculationContext) {
+func ExpandContext(dirpath string, context CalculationContext) error {
 	for name, content := range context.Inputs {
-		ExpandContextFile(dirpath, name, content)
+		err := ExpandContextFile(dirpath, name, content)
+		if err != nil {
+			return errors.WithStack(err)
+		}
 	}
+	return nil
 }
 
-func ExpandContextFile(dirpath string, name string, content interface{}) {
+func ExpandContextFile(dirpath string, name string, content interface{}) error {
 	if !HandleAsArtefact(dirpath, name, content) {
 		raw, err := json.Marshal(content)
 		if err != nil {
-			panic(err)
+			return errors.WithStack(err)
 		}
 		err = os.WriteFile(dirpath+"/"+name+".json", raw, os.ModePerm)
-		if err != nil {
-			panic(err)
-		}
+		return errors.WithStack(err)
 	}
+	return nil
 }
 
 func StreamToBytes(stream io.Reader) []byte {
@@ -186,86 +211,90 @@ func StreamToString(stream io.Reader) string {
 	return buf.String()
 }
 
-func PackageResult(dirpath string, since time.Time, stdout string, stderr string) CalculationResponse {
+func PackageResult(dirpath string, since time.Time, stdout string, stderr string) (CalculationResponse, error) {
 	response := CalculationResponse{
 		Outputs: make(map[string]interface{}),
 		Logs:    strings.Split(stdout, "\n"),
 		Errors:  strings.Split(stderr, "\n"),
 	}
-	files := GetChangedFiles(dirpath, since)
-	for _, file := range files {
-		response.Outputs[filepath.Base(file)] = HandleOutputFile(file)
+	files, err := GetChangedFiles(dirpath, since)
+	if err != nil {
+		return response, errors.WithStack(err)
 	}
-	return response
+	for _, file := range files {
+		var err error
+		response.Outputs[filepath.Base(file)], err = HandleOutputFile(file)
+		if err != nil {
+			return response, errors.WithStack(err)
+		}
+	}
+	return response, nil
 }
 
-func HandleOutputFile(file string) interface{} {
+func HandleOutputFile(file string) (interface{}, error) {
 	if strings.HasSuffix(file, ".json") {
 		data, err := os.ReadFile(file)
-		if err != nil {
-			panic(err)
-		}
 		var out interface{}
+		if err != nil {
+			return out, errors.WithStack(err)
+		}
 		err = json.Unmarshal(data, &out)
-		return out
+		return out, errors.WithStack(err)
 	} else {
-		return MakeArtefact(file)
+		artefact, err := MakeArtefact(file)
+		return artefact, errors.WithStack(err)
 	}
 }
 
-func GetChangedFiles(dirpath string, since time.Time) []string {
+func GetChangedFiles(dirpath string, since time.Time) ([]string, error) {
 	changed := make([]string, 0)
 	files, err := ioutil.ReadDir("/tmp/")
 	if err != nil {
-		panic(err)
+		return changed, errors.WithStack(err)
 	}
 	for _, file := range files {
 		if file.ModTime().After(since) {
 			changed = append(changed, file.Name())
 		}
 	}
-	return changed
+	return changed, errors.WithStack(err)
 }
 
-func SendLogs(host string, token string, calculation string, log string) {
+func SendLogs(host string, token string, calculation string, log string) error {
 	req, err := http.NewRequest("POST", host+"/api/calculations/logs/"+calculation, strings.NewReader(log))
 	if err != nil {
-		panic(err)
+		return errors.WithStack(err)
 	}
 	req.Header.Add("Authorization", "Bearer "+token)
 	_, err = http.DefaultClient.Do(req)
-	if err != nil {
-		panic(err)
-	}
+	return errors.WithStack(err)
 }
 
-func SendResult(host string, token string, calculation string, response CalculationResponse) {
+func SendResult(host string, token string, calculation string, response CalculationResponse) error {
 	data, err := json.Marshal(response)
 	if err != nil {
-		panic(err)
+		return errors.WithStack(err)
 	}
 	req, err := http.NewRequest("POST", host+"/api/calculations/remote/"+calculation, bytes.NewReader(data))
 	if err != nil {
-		panic(err)
+		return errors.WithStack(err)
 	}
 	req.Header.Add("Authorization", "Bearer "+token)
 	_, err = http.DefaultClient.Do(req)
-	if err != nil {
-		panic(err)
-	}
+	return errors.WithStack(err)
 }
 
-func MakeArtefact(path string) Artefact {
+func MakeArtefact(path string) (Artefact, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		panic(err)
+		return Artefact{}, err
 	}
 	contentType := http.DetectContentType(data)
 	return Artefact{
 		Name:        filepath.Base(path),
 		ContentType: contentType,
 		URI:         "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data),
-	}
+	}, nil
 }
 
 func HandleAsArtefact(dirpath string, name string, content interface{}) bool {
@@ -280,18 +309,16 @@ func HandleAsArtefact(dirpath string, name string, content interface{}) bool {
 	return false
 }
 
-func ReadArtefact(dirpath string, name string, artefact Artefact) {
+func ReadArtefact(dirpath string, name string, artefact Artefact) error {
 	if !strings.HasPrefix(artefact.URI, "data:") {
-		panic("Not a data URI")
+		return errors.New("Not a data URI")
 	}
 	b64 := strings.SplitN(artefact.URI, ",", 2)[1]
 	raw, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
-		panic(err)
+		return errors.WithStack(err)
 	}
 	extension := name[strings.LastIndex(artefact.Name, ".")+1:]
 	err = os.WriteFile(dirpath+"/"+name+"."+extension, raw, os.ModePerm)
-	if err != nil {
-		panic(err)
-	}
+	return errors.WithStack(err)
 }
