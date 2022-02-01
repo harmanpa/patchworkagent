@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"github.com/pkg/errors"
 	"io"
 	"io/ioutil"
@@ -56,7 +57,7 @@ func main() {
 	// Get the current directory
 	dirpath, err := os.Getwd()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal(fmt.Sprintf("%+v\n", err))
 	}
 	log.Println("Running in " + dirpath)
 	// Define the command line flags
@@ -79,13 +80,13 @@ func main() {
 		}
 		err = RunCalculation(*cmdPtr, *hostPtr, *tokenPtr, args[0], dirpath)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal(fmt.Sprintf("%+v\n", err))
 		}
 	} else {
 		// The calculation will be passed via HTTP
 		err = Server(*cmdPtr, *hostPtr, *tokenPtr, dirpath)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal(fmt.Sprintf("%+v\n", err))
 		}
 	}
 }
@@ -105,7 +106,7 @@ func Server(command string, host string, token string, dirpath string) error {
 				err = RunCalculation(command, host, token, payload, dirpath)
 			}
 			if err != nil {
-				log.Println(err)
+				log.Println(fmt.Sprintf("%+v\n", err))
 				writer.WriteHeader(500)
 			} else {
 				writer.WriteHeader(200)
@@ -168,6 +169,9 @@ func GetContext(host string, token string, calculation string) (CalculationConte
 	var dat CalculationContext
 	if err != nil {
 		return dat, errors.WithStack(err)
+	}
+	if resp.StatusCode != 200 {
+		return dat, errors.New(resp.Status)
 	}
 	err = json.Unmarshal(StreamToBytes(resp.Body), &dat)
 	return dat, errors.WithStack(err)
