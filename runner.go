@@ -122,6 +122,9 @@ func Server(command string, host string, token string, dirpath string) error {
 
 func RunCalculation(command string, host string, token string, calculation string, dirpath string) error {
 	log.Println("Preparing calculation " + calculation)
+	// Remove trailing slash from URL
+	host = strings.TrimSuffix(host, "/")
+
 	// Get all the data from the server about this calculation
 	context, err := GetContext(host, token, calculation)
 	if err != nil {
@@ -165,8 +168,13 @@ func RunCalculation(command string, host string, token string, calculation strin
 }
 
 func GetContext(host string, token string, calculation string) (CalculationContext, error) {
-	resp, err := http.Get(host + "/api/calculations/remote/" + calculation)
 	var dat CalculationContext
+	req, err := http.NewRequest("GET", host+"/api/calculations/remote/"+calculation, nil)
+	if err != nil {
+		return dat, errors.WithStack(err)
+	}
+	req.Header.Add("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return dat, errors.WithStack(err)
 	}
