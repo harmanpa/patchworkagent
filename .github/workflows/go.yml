@@ -20,3 +20,23 @@ jobs:
 
     - name: Test
       run: go test -v ./...
+    - name: Job Failed Notification
+      if: ${{ failure() }}
+      uses: rtCamp/action-slack-notify@v2.1.2
+      env:
+        SLACK_CHANNEL: releases
+        SLACK_COLOR: '#ff0000'
+        SLACK_TITLE: 'Patchworkagent Build Failed'
+        SLACK_USERNAME: patchbot
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        MSG_MINIMAL: commit
+        SLACK_FOOTER: CAE Tech
+    - name: Slack Notification
+      uses: rtCamp/action-slack-notify@v2.1.2
+      env:
+        SLACK_CHANNEL: releases
+        SLACK_TITLE: 'New build of Patchworkagent'
+        SLACK_USERNAME: patchbot
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        MSG_MINIMAL: commit
+        SLACK_FOOTER: CAE Tech
