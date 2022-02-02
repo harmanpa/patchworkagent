@@ -126,12 +126,14 @@ func RunCalculation(command string, host string, token string, calculation strin
 	host = strings.TrimSuffix(host, "/")
 
 	// Get all the data from the server about this calculation
+	log.Println("Fetching inputs of calculation " + calculation)
 	context, err := GetContext(host, token, calculation)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
 	// Write the inputs to files in the working directory
+	log.Println("Expanding inputs of calculation " + calculation)
 	err = ExpandContext(dirpath, context)
 	if err != nil {
 		return errors.WithStack(err)
@@ -150,6 +152,7 @@ func RunCalculation(command string, host string, token string, calculation strin
 	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 
 	// Run the command
+	log.Println("Running calculation " + calculation)
 	err = cmd.Run()
 	if err != nil {
 		stderrBuf.WriteString(err.Error())
@@ -157,13 +160,16 @@ func RunCalculation(command string, host string, token string, calculation strin
 	outStr, errStr := string(stdoutBuf.Bytes()), string(stderrBuf.Bytes())
 
 	// Find all files changed during the task and package them to return to server
+	log.Println("Packaging results of calculation " + calculation)
 	response, err := PackageResult(dirpath, t, outStr, errStr)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
 	// Send the data to the server
+	log.Println("Uploading results of calculation " + calculation)
 	err = SendResult(host, token, calculation, response)
+	log.Println("Completing calculation " + calculation)
 	return errors.WithStack(err)
 }
 
@@ -173,7 +179,8 @@ func GetContext(host string, token string, calculation string) (CalculationConte
 	if err != nil {
 		return dat, errors.WithStack(err)
 	}
-	req.Header.Add("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return dat, errors.WithStack(err)
@@ -281,7 +288,8 @@ func SendLogs(host string, token string, calculation string, log string) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	req.Header.Add("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "text/plain")
 	_, err = http.DefaultClient.Do(req)
 	return errors.WithStack(err)
 }
@@ -295,8 +303,12 @@ func SendResult(host string, token string, calculation string, response Calculat
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	req.Header.Add("Authorization", "Bearer "+token)
-	_, err = http.DefaultClient.Do(req)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if resp.StatusCode != 200 {
+		return errors.New(resp.Status)
+	}
 	return errors.WithStack(err)
 }
 
