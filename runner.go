@@ -337,7 +337,7 @@ func ReadArtefact(dirpath string, name string, artefact Artefact) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	extension := name[strings.LastIndex(artefact.Name, ".")+1:]
+	extension := artefact.Name[strings.LastIndex(artefact.Name, ".")+1:]
 	err = os.WriteFile(dirpath+"/"+name+"."+extension, raw, os.ModePerm)
 	return errors.WithStack(err)
 }
