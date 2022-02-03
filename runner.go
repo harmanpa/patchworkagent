@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -143,8 +144,12 @@ func RunCalculation(command string, host string, token string, calculation strin
 	t := time.Now()
 
 	// Make a Cmd object
-	commandArgs := strings.Split(command, " ")
-	cmd := exec.Cmd{Path: commandArgs[0], Args: commandArgs[1:]}
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd", "/c", command)
+	} else {
+		cmd = exec.Command("bash", "-c", command)
+	}
 
 	// Capture stdout/stderr
 	var stdoutBuf, stderrBuf bytes.Buffer
