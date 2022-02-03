@@ -93,32 +93,50 @@ func main() {
 }
 
 func Server(command string, host string, token string, dirpath string) error {
-	http.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
+	http.HandleFunc("/", limitNumClients(func(writer http.ResponseWriter, request *http.Request) {
 		if "POST" == strings.ToUpper(request.Method) {
 			// TODO: This should handle some different structures: Google Pubsub, or just a string etc
 			// RunCalculation()
-			payload := StreamToString(request.Body)
-			var err error
-			if strings.HasPrefix(payload, "{") {
-				var calc CalculationPayload
-				json.Unmarshal(StringToBytes(payload), &calc)
-				err = RunCalculation(command, calc.Host, calc.Token, calc.Id, dirpath)
-			} else {
-				err = RunCalculation(command, host, token, payload, dirpath)
-			}
+			dir, err := ioutil.TempDir(dirpath, "calc")
 			if err != nil {
 				log.Println(fmt.Sprintf("%+v\n", err))
 				writer.WriteHeader(500)
 			} else {
-				writer.WriteHeader(200)
+				payload := StreamToString(request.Body)
+				if strings.HasPrefix(payload, "{") {
+					var calc CalculationPayload
+					json.Unmarshal(StringToBytes(payload), &calc)
+					err = RunCalculation(command, calc.Host, calc.Token, calc.Id, dir)
+				} else {
+					err = RunCalculation(command, host, token, payload, dir)
+				}
+				os.RemoveAll(dir)
+				if err != nil {
+					log.Println(fmt.Sprintf("%+v\n", err))
+					writer.WriteHeader(500)
+				} else {
+					writer.WriteHeader(200)
+				}
 			}
 		} else {
 			writer.WriteHeader(404)
 		}
-	})
+	}, 4))
 	log.Println("Starting server on port 8080")
 	err := http.ListenAndServe(":8080", nil)
 	return errors.WithStack(err)
+}
+
+// limitNumClients is HTTP handling middleware that ensures no more than
+// maxClients requests are passed concurrently to the given handler f.
+func limitNumClients(f http.HandlerFunc, maxClients int) http.HandlerFunc {
+	sema := make(chan struct{}, maxClients)
+
+	return func(w http.ResponseWriter, req *http.Request) {
+		sema <- struct{}{}
+		defer func() { <-sema }()
+		f(w, req)
+	}
 }
 
 func RunCalculation(command string, host string, token string, calculation string, dirpath string) error {
@@ -146,9 +164,9 @@ func RunCalculation(command string, host string, token string, calculation strin
 	// Make a Cmd object
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/c", command)
+		cmd = exec.Command("cmd", "/c", strings.TrimSuffix(strings.TrimPrefix(command, "\""), "\""))
 	} else {
-		cmd = exec.Command("bash", "-c", command)
+		cmd = exec.Command("bash", "-c", strings.TrimSuffix(strings.TrimPrefix(command, "\""), "\""))
 	}
 
 	// Capture stdout/stderr
