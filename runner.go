@@ -168,6 +168,7 @@ func RunCalculation(command string, host string, token string, calculation strin
 	} else {
 		cmd = exec.Command("bash", "-c", strings.TrimSuffix(strings.TrimPrefix(command, "\""), "\""))
 	}
+	cmd.Dir = dirpath
 
 	// Capture stdout/stderr
 	var stdoutBuf, stderrBuf bytes.Buffer
