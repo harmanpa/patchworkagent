@@ -217,6 +217,7 @@ func ExpandContextFile(dirpath string, name string, content interface{}) error {
 		if err != nil {
 			return errors.WithStack(err)
 		}
+		log.Println("Writing input file " + dirpath + "/" + name + ".json")
 		err = os.WriteFile(dirpath+"/"+name+".json", raw, os.ModePerm)
 		return errors.WithStack(err)
 	}
@@ -260,6 +261,7 @@ func PackageResult(dirpath string, since time.Time, stdout string, stderr string
 }
 
 func HandleOutputFile(file string) (interface{}, error) {
+	log.Println("Reading output file " + file)
 	if strings.HasSuffix(file, ".json") {
 		data, err := os.ReadFile(file)
 		var out interface{}
@@ -355,6 +357,7 @@ func ReadArtefact(dirpath string, name string, artefact Artefact) error {
 		return errors.WithStack(err)
 	}
 	extension := artefact.Name[strings.LastIndex(artefact.Name, ".")+1:]
+	log.Println("Writing input file " + dirpath + "/" + name + "." + extension)
 	err = os.WriteFile(dirpath+"/"+name+"."+extension, raw, os.ModePerm)
 	return errors.WithStack(err)
 }
