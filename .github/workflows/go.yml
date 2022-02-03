@@ -9,17 +9,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-
     - name: Set up Go
       uses: actions/setup-go@v2
       with:
         go-version: 1.17
-
     - name: Build
       run: go build -v ./...
-
     - name: Test
       run: go test -v ./...
+    - name: Docker login
+      run: docker login ghcr.io -u $GITHUB_ACTOR -p $GITHUB_TOKEN
+      env:
+          GITHUB_TOKEN: ${{ secrets.GH }}
+    - name: Build and tag agentbase image
+      run: docker build -t "ghcr.io/harmanpa/agentbase:$(git rev-parse --short HEAD)" .
+    - name: Publish agentbase to GPR
+      run: docker push "ghcr.io/harmanpa/agentbase:$(git rev-parse --short HEAD)"      
     - name: Job Failed Notification
       if: ${{ failure() }}
       uses: rtCamp/action-slack-notify@v2.1.2
