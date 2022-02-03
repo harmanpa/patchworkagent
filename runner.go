@@ -358,9 +358,7 @@ func HandleAsArtefact(dirpath string, name string, content interface{}) (bool, e
 			ContentType: toexpand["contentType"].(string),
 			URI:         toexpand["uri"].(string),
 		})
-		if err != nil {
-			return false, errors.WithStack(err)
-		}
+		return true, errors.WithStack(err)
 	}
 	return false, nil
 }
