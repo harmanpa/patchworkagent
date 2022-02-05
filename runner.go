@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
@@ -15,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -65,10 +67,16 @@ func main() {
 	cmdPtr := flag.String("c", "", "Command to execute")
 	hostPtr := flag.String("h", "", "Host of calling app")
 	tokenPtr := flag.String("t", "", "Security token")
+	concurrencyPtr := flag.String("concurrency", "4", "Concurrency if http server")
+	timeoutPtr := flag.String("timeout", "3600", "Timeout in s")
 	flag.Parse()
 	log.Println("Calculation command is " + *cmdPtr)
 	if len(*cmdPtr) == 0 {
 		log.Fatal("No command provided")
+	}
+	timeout, err := strconv.Atoi(*timeoutPtr)
+	if err != nil {
+		timeout = 3600
 	}
 	args := flag.Args()
 	if len(args) > 0 {
@@ -79,20 +87,25 @@ func main() {
 		if len(*hostPtr) == 0 {
 			log.Fatal("No host provided")
 		}
-		err = RunCalculation(*cmdPtr, *hostPtr, *tokenPtr, args[0], dirpath)
+		err = RunCalculation(*cmdPtr, *hostPtr, *tokenPtr, args[0], dirpath, timeout)
 		if err != nil {
 			log.Fatal(fmt.Sprintf("%+v\n", err))
 		}
 	} else {
+		// Get the concurrency
+		concurrency, err := strconv.Atoi(*concurrencyPtr)
+		if err != nil {
+			concurrency = 4
+		}
 		// The calculation will be passed via HTTP
-		err = Server(*cmdPtr, *hostPtr, *tokenPtr, dirpath)
+		err = Server(*cmdPtr, *hostPtr, *tokenPtr, dirpath, concurrency, timeout)
 		if err != nil {
 			log.Fatal(fmt.Sprintf("%+v\n", err))
 		}
 	}
 }
 
-func Server(command string, host string, token string, dirpath string) error {
+func Server(command string, host string, token string, dirpath string, concurrency int, timeout int) error {
 	http.HandleFunc("/", limitNumClients(func(writer http.ResponseWriter, request *http.Request) {
 		if "POST" == strings.ToUpper(request.Method) {
 			// TODO: This should handle some different structures: Google Pubsub, or just a string etc
@@ -106,9 +119,9 @@ func Server(command string, host string, token string, dirpath string) error {
 				if strings.HasPrefix(payload, "{") {
 					var calc CalculationPayload
 					json.Unmarshal(StringToBytes(payload), &calc)
-					err = RunCalculation(command, calc.Host, calc.Token, calc.Id, dir)
+					err = RunCalculation(command, calc.Host, calc.Token, calc.Id, dir, timeout)
 				} else {
-					err = RunCalculation(command, host, token, payload, dir)
+					err = RunCalculation(command, host, token, payload, dir, timeout)
 				}
 				os.RemoveAll(dir)
 				if err != nil {
@@ -121,7 +134,7 @@ func Server(command string, host string, token string, dirpath string) error {
 		} else {
 			writer.WriteHeader(404)
 		}
-	}, 4))
+	}, concurrency))
 	log.Println("Starting server on port 8080")
 	err := http.ListenAndServe(":8080", nil)
 	return errors.WithStack(err)
@@ -139,21 +152,21 @@ func limitNumClients(f http.HandlerFunc, maxClients int) http.HandlerFunc {
 	}
 }
 
-func RunCalculation(command string, host string, token string, calculation string, dirpath string) error {
+func RunCalculation(command string, host string, token string, calculation string, dirpath string, timeout int) error {
 	log.Println("Preparing calculation " + calculation)
 	// Remove trailing slash from URL
 	host = strings.TrimSuffix(host, "/")
 
 	// Get all the data from the server about this calculation
 	log.Println("Fetching inputs of calculation " + calculation)
-	context, err := GetContext(host, token, calculation)
+	calcContext, err := GetContext(host, token, calculation)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
 	// Write the inputs to files in the working directory
 	log.Println("Expanding inputs of calculation " + calculation)
-	err = ExpandContext(dirpath, context)
+	err = ExpandContext(dirpath, calcContext)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -161,12 +174,17 @@ func RunCalculation(command string, host string, token string, calculation strin
 	// Get a timestamp before running the calculation
 	t := time.Now()
 
+	// Create a new context and add a timeout to it
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(timeout))
+
 	// Make a Cmd object
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/c", strings.TrimSuffix(strings.TrimPrefix(command, "\""), "\""))
+		cmd = exec.CommandContext(ctx, "cmd", "/c",
+			strings.TrimSuffix(strings.TrimPrefix(command, "\""), "\""))
 	} else {
-		cmd = exec.Command("bash", "-c", strings.TrimSuffix(strings.TrimPrefix(command, "\""), "\""))
+		cmd = exec.CommandContext(ctx, "bash", "-c",
+			strings.TrimSuffix(strings.TrimPrefix(command, "\""), "\""))
 	}
 	cmd.Dir = dirpath
 
@@ -181,12 +199,21 @@ func RunCalculation(command string, host string, token string, calculation strin
 	if err != nil {
 		stderrBuf.WriteString(err.Error())
 	}
+
+	// We want to check the context error to see if the timeout was executed.
+	// The error returned by cmd.Output() will be OS specific based on what
+	// happens when a process is killed.
+	if ctx.Err() == context.DeadlineExceeded {
+		stderrBuf.WriteString("Command timed out")
+	}
 	outStr, errStr := string(stdoutBuf.Bytes()), string(stderrBuf.Bytes())
 
 	// Find all files changed during the task and package them to return to server
 	log.Println("Packaging results of calculation " + calculation)
 	response, err := PackageResult(dirpath, t, outStr, errStr)
 	if err != nil {
+		// Cleanup
+		cancel()
 		return errors.WithStack(err)
 	}
 
@@ -194,6 +221,8 @@ func RunCalculation(command string, host string, token string, calculation strin
 	log.Println("Uploading results of calculation " + calculation)
 	err = SendResult(host, token, calculation, response)
 	log.Println("Completing calculation " + calculation)
+	// Cleanup
+	cancel()
 	return errors.WithStack(err)
 }
 
