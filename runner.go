@@ -325,13 +325,16 @@ func HandleOutputFile(file string) (interface{}, error) {
 }
 
 func GetChangedFiles(dirpath string, since time.Time) ([]string, error) {
+	log.Println("Looking for files that have changed since " + since.Format(time.RFC3339))
 	changed := make([]string, 0)
 	files, err := ioutil.ReadDir(dirpath)
 	if err != nil {
 		return changed, errors.WithStack(err)
 	}
 	for _, file := range files {
+		log.Println("Checking file " + file.Name() + " changed " + file.ModTime().Format(time.RFC3339))
 		if !file.IsDir() && file.ModTime().After(since) {
+			log.Println("Including file " + file.Name())
 			changed = append(changed, file.Name())
 		}
 	}
