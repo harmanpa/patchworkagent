@@ -288,11 +288,20 @@ func StreamToString(stream io.Reader) string {
 	return buf.String()
 }
 
+func TrimAndSplit(str string) []string {
+	out := make([]string, 0)
+	str = strings.Trim(str, " \t\r\n")
+	if len(str) > 0 {
+		out = strings.Split(str, "\n")
+	}
+	return out
+}
+
 func PackageResult(dirpath string, since time.Time, stdout string, stderr string) (CalculationResponse, error) {
 	response := CalculationResponse{
 		Outputs: make(map[string]interface{}),
-		Logs:    strings.Split(stdout, "\n"),
-		Errors:  strings.Split(stderr, "\n"),
+		Logs:    TrimAndSplit(stdout),
+		Errors:  TrimAndSplit(stderr),
 	}
 	files, err := GetChangedFiles(dirpath, since)
 	if err != nil {
