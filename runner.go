@@ -326,7 +326,7 @@ func HandleOutputFile(file string) (interface{}, error) {
 
 func GetChangedFiles(dirpath string, since time.Time) ([]string, error) {
 	changed := make([]string, 0)
-	files, err := ioutil.ReadDir("/tmp/")
+	files, err := ioutil.ReadDir(dirpath)
 	if err != nil {
 		return changed, errors.WithStack(err)
 	}
