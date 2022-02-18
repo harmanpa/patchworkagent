@@ -331,7 +331,7 @@ func GetChangedFiles(dirpath string, since time.Time) ([]string, error) {
 		return changed, errors.WithStack(err)
 	}
 	for _, file := range files {
-		if file.ModTime().After(since) {
+		if !file.IsDir() && file.ModTime().After(since) {
 			changed = append(changed, file.Name())
 		}
 	}
