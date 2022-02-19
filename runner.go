@@ -300,7 +300,12 @@ func TrimAndSplit(str string) []string {
 func StringsToJson(strs []string) string {
 	out := make([]string, len(strs))
 	for i, s := range strs {
-		out[i] = "\"" + s + "\""
+		sjson, err := json.Marshal(s)
+		if err != nil {
+			out[i] = "\"\""
+		} else {
+			out[i] = string(sjson)
+		}
 	}
 	return "[" + strings.Join(out, ", ") + "]"
 }
