@@ -297,12 +297,19 @@ func TrimAndSplit(str string) []string {
 	return out
 }
 
-func PackageResult(dirpath string, since time.Time, stdout string, stderr string) (CalculationResponse, error) {
-	response := CalculationResponse{
-		Outputs: make(map[string]interface{}),
-		Logs:    TrimAndSplit(stdout),
-		Errors:  TrimAndSplit(stderr),
+func StringsToJson(strs []string) string {
+	out := make([]string, len(strs))
+	for i, s := range strs {
+		out[i] = "\"" + s + "\""
 	}
+	return "[" + strings.Join(out, ", ") + "]"
+}
+
+func PackageResult(dirpath string, since time.Time, stdout string, stderr string) (string, error) {
+	response := "{\n"
+	response += "\t\"logs\": " + StringsToJson(TrimAndSplit(stdout)) + ",\n"
+	response += "\t\"errors\": " + StringsToJson(TrimAndSplit(stderr)) + ",\n"
+	response += "\t\"outputs\": {"
 	files, err := GetChangedFiles(dirpath, since)
 	if err != nil {
 		return response, errors.WithStack(err)
@@ -310,26 +317,24 @@ func PackageResult(dirpath string, since time.Time, stdout string, stderr string
 	for _, file := range files {
 		var err error
 		filedata, err := HandleOutputFile(file)
-		filejson, err := json.Marshal(filedata)
-		log.Println(string(filejson))
-		response.Outputs[filepath.Base(file)] = filedata
+		log.Println(filedata)
 		if err != nil {
 			return response, errors.WithStack(err)
 		}
+		response += "\t\t\"" + filepath.Base(file) + "\": " + filedata + ",\n"
 	}
+	response += "\t}\n}"
 	return response, nil
 }
 
-func HandleOutputFile(file string) (interface{}, error) {
+func HandleOutputFile(file string) (string, error) {
 	log.Println("Reading output file " + file)
 	if strings.HasSuffix(file, ".json") {
 		data, err := os.ReadFile(file)
-		var out interface{}
 		if err != nil {
-			return out, errors.WithStack(err)
+			return "", errors.WithStack(err)
 		}
-		err = json.Unmarshal(data, &out)
-		return out, errors.WithStack(err)
+		return string(data), nil
 	} else {
 		artefact, err := MakeArtefact(file)
 		return artefact, errors.WithStack(err)
@@ -364,12 +369,10 @@ func SendLogs(host string, token string, calculation string, log string) error {
 	return errors.WithStack(err)
 }
 
-func SendResult(host string, token string, calculation string, response CalculationResponse) error {
-	data, err := json.Marshal(response)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	req, err := http.NewRequest("POST", host+"/api/calculations/remote/"+calculation, bytes.NewReader(data))
+func SendResult(host string, token string, calculation string, response string) error {
+	req, err := http.NewRequest("POST",
+		host+"/api/calculations/remote/"+calculation,
+		strings.NewReader(response))
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -382,20 +385,18 @@ func SendResult(host string, token string, calculation string, response Calculat
 	return errors.WithStack(err)
 }
 
-func MakeArtefact(path string) (Artefact, error) {
+func MakeArtefact(path string) (string, error) {
 	log.Println("Converting file to Artefact")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		log.Println("Failed to read into memory " + err.Error())
-		return Artefact{}, err
+		return "", err
 	}
+	name := filepath.Base(path)
 	contentType := http.DetectContentType(data)
+	uri := "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data)
 	log.Println("Detected content-type of " + contentType)
-	return Artefact{
-		name:        filepath.Base(path),
-		contentType: contentType,
-		uri:         "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data),
-	}, nil
+	return "{\"name\": \"" + name + "\", \"contentType\": \"" + contentType + "\", \"uri\": \"" + uri + "\"}", nil
 }
 
 func HandleAsArtefact(dirpath string, name string, content interface{}) (bool, error) {
