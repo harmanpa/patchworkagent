@@ -380,11 +380,14 @@ func SendResult(host string, token string, calculation string, response Calculat
 }
 
 func MakeArtefact(path string) (Artefact, error) {
+	log.Println("Converting file to Artefact")
 	data, err := os.ReadFile(path)
 	if err != nil {
+		log.Println("Failed to read into memory " + err.Error())
 		return Artefact{}, err
 	}
 	contentType := http.DetectContentType(data)
+	log.Println("Detected content-type of " + contentType)
 	return Artefact{
 		Name:        filepath.Base(path),
 		ContentType: contentType,
