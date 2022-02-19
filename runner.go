@@ -22,9 +22,9 @@ import (
 )
 
 type Artefact struct {
-	Name        string `json:"name"`
-	ContentType string `json:"contentType"`
-	URI         string `json:"uri"`
+	name        string `json:"name"`
+	contentType string `json:"contentType"`
+	uri         string `json:"uri"`
 }
 
 type CalculationId struct {
@@ -389,9 +389,9 @@ func MakeArtefact(path string) (Artefact, error) {
 	contentType := http.DetectContentType(data)
 	log.Println("Detected content-type of " + contentType)
 	return Artefact{
-		Name:        filepath.Base(path),
-		ContentType: contentType,
-		URI:         "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data),
+		name:        filepath.Base(path),
+		contentType: contentType,
+		uri:         "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data),
 	}, nil
 }
 
@@ -400,9 +400,9 @@ func HandleAsArtefact(dirpath string, name string, content interface{}) (bool, e
 		toexpand := content.(map[string]interface{})
 		if toexpand["name"] != nil && toexpand["uri"] != nil && toexpand["contentType"] != nil {
 			err := ReadArtefact(dirpath, name, Artefact{
-				Name:        toexpand["name"].(string),
-				ContentType: toexpand["contentType"].(string),
-				URI:         toexpand["uri"].(string),
+				name:        toexpand["name"].(string),
+				contentType: toexpand["contentType"].(string),
+				uri:         toexpand["uri"].(string),
 			})
 			return true, errors.WithStack(err)
 		}
@@ -411,15 +411,15 @@ func HandleAsArtefact(dirpath string, name string, content interface{}) (bool, e
 }
 
 func ReadArtefact(dirpath string, name string, artefact Artefact) error {
-	if !strings.HasPrefix(artefact.URI, "data:") {
+	if !strings.HasPrefix(artefact.uri, "data:") {
 		return errors.New("Not a data URI")
 	}
-	b64 := strings.SplitN(artefact.URI, ",", 2)[1]
+	b64 := strings.SplitN(artefact.uri, ",", 2)[1]
 	raw, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	extension := artefact.Name[strings.LastIndex(artefact.Name, ".")+1:]
+	extension := artefact.name[strings.LastIndex(artefact.name, ".")+1:]
 	log.Println("Writing input file " + dirpath + "/" + name + "." + extension)
 	err = os.WriteFile(dirpath+"/"+name+"."+extension, raw, os.ModePerm)
 	return errors.WithStack(err)
