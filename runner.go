@@ -389,14 +389,17 @@ func MakeArtefact(path string) (string, error) {
 	log.Println("Converting file to Artefact")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		log.Println("Failed to read into memory " + err.Error())
 		return "", err
 	}
 	name := filepath.Base(path)
 	contentType := http.DetectContentType(data)
 	uri := "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data)
 	log.Println("Detected content-type of " + contentType)
-	return "{\"name\": \"" + name + "\", \"contentType\": \"" + contentType + "\", \"uri\": \"" + uri + "\"}", nil
+	uribytes, err := json.Marshal(uri)
+	if err != nil {
+		return "", err
+	}
+	return "{\"name\": \"" + name + "\", \"contentType\": \"" + contentType + "\", \"uri\": " + string(uribytes) + "}", nil
 }
 
 func HandleAsArtefact(dirpath string, name string, content interface{}) (bool, error) {
