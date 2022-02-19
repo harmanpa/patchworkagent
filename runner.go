@@ -314,21 +314,26 @@ func PackageResult(dirpath string, since time.Time, stdout string, stderr string
 	response := "{\n"
 	response += "\t\"logs\": " + StringsToJson(TrimAndSplit(stdout)) + ",\n"
 	response += "\t\"errors\": " + StringsToJson(TrimAndSplit(stderr)) + ",\n"
-	response += "\t\"outputs\": {"
+	response += "\t\"outputs\": {\n"
 	files, err := GetChangedFiles(dirpath, since)
 	if err != nil {
 		return response, errors.WithStack(err)
 	}
+	first := true
 	for _, file := range files {
 		var err error
 		filedata, err := HandleOutputFile(file)
-		log.Println(filedata)
 		if err != nil {
 			return response, errors.WithStack(err)
 		}
-		response += "\t\t\"" + filepath.Base(file) + "\": " + filedata + ",\n"
+		if first {
+			first = false
+		} else {
+			response += ",\n"
+		}
+		response += "\t\t\"" + filepath.Base(file) + "\": " + filedata
 	}
-	response += "\t}\n}"
+	response += "\n\t}\n}"
 	return response, nil
 }
 
