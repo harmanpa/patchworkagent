@@ -309,7 +309,10 @@ func PackageResult(dirpath string, since time.Time, stdout string, stderr string
 	}
 	for _, file := range files {
 		var err error
-		response.Outputs[filepath.Base(file)], err = HandleOutputFile(file)
+		filedata, err := HandleOutputFile(file)
+		filejson, err := json.Marshal(filedata)
+		log.Println(string(filejson))
+		response.Outputs[filepath.Base(file)] = filedata
 		if err != nil {
 			return response, errors.WithStack(err)
 		}
