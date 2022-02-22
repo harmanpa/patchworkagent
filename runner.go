@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/pkg/errors"
 	"io"
 	"io/ioutil"
 	"log"
@@ -19,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pkg/errors"
 )
 
 type Artefact struct {
@@ -360,6 +361,11 @@ func GetChangedFiles(dirpath string, since time.Time) ([]string, error) {
 	}
 	for _, file := range files {
 		log.Println("Checking file " + file.Name() + " changed " + file.ModTime().Format(time.RFC3339))
+		log.Println("Size is")
+		log.Print(file.Size())
+		log.Println("Mode is in dir?")
+		log.Print(file.Mode().IsDir())
+		log.Print("Mode string is: " + file.Mode().String())
 		if !file.IsDir() && file.ModTime().After(since) {
 			log.Println("Including file " + file.Name())
 			changed = append(changed, file.Name())
