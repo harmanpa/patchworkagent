@@ -363,12 +363,7 @@ func GetChangedFiles(dirpath string, since time.Time) ([]string, error) {
 		log.Println("Checking file " + file.Name() + " changed " + file.ModTime().Format(time.RFC3339))
 		if !file.IsDir() && file.ModTime().After(since) {
 			log.Println("Including file " + file.Name())
-			fileAbsolutePath, err := filepath.Abs(file.Name())
-			log.Println("path" + fileAbsolutePath)
-			if err != nil {
-				return changed, errors.WithStack(err)
-			}
-			changed = append(changed, fileAbsolutePath)
+			changed = append(changed, file.Name())
 		}
 	}
 	return changed, errors.WithStack(err)
