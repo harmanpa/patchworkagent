@@ -194,6 +194,12 @@ func RunCalculation(command string, host string, token string, calculation strin
 	cmd.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
 	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 
+	// Notify the server that we are now Running
+	err = SendLogs(host, token, calculation, "", 0.0)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
 	// Run the command
 	log.Println("Running calculation " + calculation)
 	err = cmd.Run()
@@ -369,8 +375,8 @@ func GetChangedFiles(dirpath string, since time.Time) ([]string, error) {
 	return changed, errors.WithStack(err)
 }
 
-func SendLogs(host string, token string, calculation string, log string) error {
-	req, err := http.NewRequest("POST", host+"/api/calculations/logs/"+calculation, strings.NewReader(log))
+func SendLogs(host string, token string, calculation string, log string, progress float32) error {
+	req, err := http.NewRequest("POST", host+"/api/calculations/logs/"+calculation+"?progress="+fmt.Sprintf("%f", progress), strings.NewReader(log))
 	if err != nil {
 		return errors.WithStack(err)
 	}
