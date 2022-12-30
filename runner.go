@@ -42,6 +42,16 @@ type CalculationPayload struct {
 	Token string `json:"token"`
 }
 
+type PubSubPayload struct {
+	Message PubSubMessage `json:"message"`
+}
+
+type PubSubMessage struct {
+	MessageId   string `json:"messageId"`
+	PublishTime string `json:"publishTime"`
+	Data        string `json:"data"`
+}
+
 type CalculationContext struct {
 	Id           CalculationId          `json:"id"`
 	Owner        string                 `json:"owner"`
@@ -118,9 +128,25 @@ func Server(command string, host string, token string, dirpath string, concurren
 			} else {
 				payload := StreamToString(request.Body)
 				if strings.HasPrefix(payload, "{") {
+					// Try to get a payload
 					var calc CalculationPayload
-					json.Unmarshal(StringToBytes(payload), &calc)
-					err = RunCalculation(command, calc.Host, calc.Token, calc.Id, dir, timeout)
+					err = json.Unmarshal(StringToBytes(payload), &calc)
+					if err != nil {
+						// It might be in the Google PubSub format
+						var pubsub PubSubPayload
+						err = json.Unmarshal(StringToBytes(payload), &pubsub)
+						if err == nil {
+							data, err := base64.StdEncoding.DecodeString(pubsub.Message.Data)
+							if err == nil {
+								err = json.Unmarshal(data, &calc)
+								if err == nil {
+									err = RunCalculation(command, calc.Host, calc.Token, calc.Id, dir, timeout)
+								}
+							}
+						}
+					} else {
+						err = RunCalculation(command, calc.Host, calc.Token, calc.Id, dir, timeout)
+					}
 				} else {
 					err = RunCalculation(command, host, token, payload, dir, timeout)
 				}
