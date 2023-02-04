@@ -214,6 +214,9 @@ func RunCalculation(command string, host string, token string, calculation strin
 			strings.TrimSuffix(strings.TrimPrefix(command, "\""), "\""))
 	}
 	cmd.Dir = dirpath
+	cmd.Env = make([]string, 2)
+	cmd.Env[0] = "HOST=" + host
+	cmd.Env[1] = "TOKEN=" + token
 
 	// Capture stdout/stderr
 	var stdoutBuf, stderrBuf bytes.Buffer
