@@ -186,8 +186,8 @@ func RunCalculation(command string, host string, token string, calculation strin
 
 	// Get all the data from the server about this calculation
 	log.Println("Fetching inputs of calculation " + calculation)
-	calcContext, err := GetContext(host, token, calculation)
-	if err != nil {
+	calcContext, err, abort := GetContext(host, token, calculation)
+	if err != nil || abort {
 		return errors.WithStack(err)
 	}
 
@@ -262,23 +262,30 @@ func RunCalculation(command string, host string, token string, calculation strin
 	return errors.WithStack(err)
 }
 
-func GetContext(host string, token string, calculation string) (CalculationContext, error) {
+func GetContext(host string, token string, calculation string) (CalculationContext, error, bool) {
 	var dat CalculationContext
+	var abort bool
+	abort = false
 	req, err := http.NewRequest("GET", host+"/api/calculations/remote/"+calculation, nil)
 	if err != nil {
-		return dat, errors.WithStack(err)
+		return dat, errors.WithStack(err), abort
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return dat, errors.WithStack(err)
+		return dat, errors.WithStack(err), abort
+	}
+	// HTTP code to indicate we already ran the calculation
+	if resp.StatusCode == 208 {
+		abort = true
+		return dat, errors.WithStack(err), abort
 	}
 	if resp.StatusCode != 200 {
-		return dat, errors.New(resp.Status)
+		return dat, errors.New(resp.Status), abort
 	}
 	err = json.Unmarshal(StreamToBytes(resp.Body), &dat)
-	return dat, errors.WithStack(err)
+	return dat, errors.WithStack(err), abort
 }
 
 func ExpandContext(dirpath string, context CalculationContext) error {
