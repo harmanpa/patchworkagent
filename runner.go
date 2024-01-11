@@ -187,7 +187,10 @@ func RunCalculation(command string, host string, token string, calculation strin
 	// Get all the data from the server about this calculation
 	log.Println("Fetching inputs of calculation " + calculation)
 	calcContext, err, abort := GetContext(host, token, calculation)
-	if err != nil || abort {
+	if abort {
+		return nil
+	}
+	if err != nil {
 		return errors.WithStack(err)
 	}
 
@@ -273,12 +276,12 @@ func GetContext(host string, token string, calculation string) (CalculationConte
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
 	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return dat, errors.WithStack(err), abort
-	}
 	// HTTP code to indicate we already ran the calculation
 	if resp.StatusCode == 208 {
 		abort = true
+		return dat, nil, abort
+	}
+	if err != nil {
 		return dat, errors.WithStack(err), abort
 	}
 	if resp.StatusCode != 200 {
