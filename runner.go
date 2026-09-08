@@ -196,7 +196,7 @@ func RunCalculation(command string, host string, token string, calculation strin
 
 	// Write the inputs to files in the working directory
 	log.Println("Expanding inputs of calculation " + calculation)
-	err = ExpandContext(dirpath, calcContext)
+	err = ExpandContext(dirpath, token, calcContext)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -204,8 +204,12 @@ func RunCalculation(command string, host string, token string, calculation strin
 	// Get a timestamp before running the calculation
 	t := time.Now()
 
-	// Create a new context and add a timeout to it
+	// Create a new context and add a timeout to it. Deferred rather than
+	// cancelled at each exit: the early return below - the server refusing the
+	// first log - left it uncancelled, leaking a context and its timer per
+	// calculation for the life of an agent serving over HTTP.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(timeout))
+	defer cancel()
 
 	// Make a Cmd object
 	var cmd *exec.Cmd
@@ -217,9 +221,19 @@ func RunCalculation(command string, host string, token string, calculation strin
 			strings.TrimSuffix(strings.TrimPrefix(command, "\""), "\""))
 	}
 	cmd.Dir = dirpath
-	cmd.Env = make([]string, 2)
-	cmd.Env[0] = "HOST=" + host
-	cmd.Env[1] = "TOKEN=" + token
+	// Extend the environment rather than replace it. Replacing it leaves the
+	// command with no PATH and, in an image whose runtime is set up by its
+	// entrypoint - a conda environment, a toolchain activation - none of that
+	// setup either, so the command cannot find the very tools the image exists
+	// to provide.
+	cmd.Env = append(os.Environ(),
+		"HOST="+host,
+		"TOKEN="+token,
+		// The calculation the command is running for, so that a long task can
+		// report its own progress to /api/calculations/logs/<id>. Without it the
+		// only progress the server sees is the one this agent sends before the
+		// command starts, and a run of any length looks stalled.
+		"CALCULATION="+calculation)
 
 	// Capture stdout/stderr
 	var stdoutBuf, stderrBuf bytes.Buffer
@@ -251,8 +265,6 @@ func RunCalculation(command string, host string, token string, calculation strin
 	log.Println("Packaging results of calculation " + calculation)
 	response, err := PackageResult(dirpath, t, outStr, errStr)
 	if err != nil {
-		// Cleanup
-		cancel()
 		return errors.WithStack(err)
 	}
 
@@ -260,8 +272,6 @@ func RunCalculation(command string, host string, token string, calculation strin
 	log.Println("Uploading results of calculation " + calculation)
 	err = SendResult(host, token, calculation, response)
 	log.Println("Completing calculation " + calculation)
-	// Cleanup
-	cancel()
 	return errors.WithStack(err)
 }
 
@@ -276,13 +286,17 @@ func GetContext(host string, token string, calculation string) (CalculationConte
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
 	resp, err := http.DefaultClient.Do(req)
+	// Check the error before the response: a request that failed to go out at
+	// all - no route, TLS refused, host not resolving - returns a nil response,
+	// and reading its status panics instead of reporting what went wrong.
+	if err != nil {
+		return dat, errors.WithStack(err), abort
+	}
+	defer resp.Body.Close()
 	// HTTP code to indicate we already ran the calculation
 	if resp.StatusCode == 208 {
 		abort = true
 		return dat, nil, abort
-	}
-	if err != nil {
-		return dat, errors.WithStack(err), abort
 	}
 	if resp.StatusCode != 200 {
 		return dat, errors.New(resp.Status), abort
@@ -291,9 +305,9 @@ func GetContext(host string, token string, calculation string) (CalculationConte
 	return dat, errors.WithStack(err), abort
 }
 
-func ExpandContext(dirpath string, context CalculationContext) error {
+func ExpandContext(dirpath string, token string, context CalculationContext) error {
 	for name, content := range context.Inputs {
-		err := ExpandContextFile(dirpath, name, content)
+		err := ExpandContextFile(dirpath, token, name, content)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -301,8 +315,8 @@ func ExpandContext(dirpath string, context CalculationContext) error {
 	return nil
 }
 
-func ExpandContextFile(dirpath string, name string, content interface{}) error {
-	isArtefact, err := HandleAsArtefact(dirpath, name, content)
+func ExpandContextFile(dirpath string, token string, name string, content interface{}) error {
+	isArtefact, err := HandleAsArtefact(dirpath, token, name, content)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -435,10 +449,14 @@ func SendResult(host string, token string, calculation string, response string) 
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		return errors.New(resp.Status)
 	}
-	return errors.WithStack(err)
+	return nil
 }
 
 func MakeArtefact(path string) (string, error) {
@@ -458,11 +476,14 @@ func MakeArtefact(path string) (string, error) {
 	return "{\"name\": \"" + name + "\", \"contentType\": \"" + contentType + "\", \"uri\": " + string(uribytes) + "}", nil
 }
 
-func HandleAsArtefact(dirpath string, name string, content interface{}) (bool, error) {
+func HandleAsArtefact(dirpath string, token string, name string, content interface{}) (bool, error) {
 	if content != nil {
-		toexpand := content.(map[string]interface{})
+		toexpand, ok := content.(map[string]interface{})
+		if !ok {
+			return false, nil
+		}
 		if toexpand["name"] != nil && toexpand["uri"] != nil && toexpand["contentType"] != nil {
-			err := ReadArtefact(dirpath, name, Artefact{
+			err := ReadArtefact(dirpath, token, name, Artefact{
 				name:        toexpand["name"].(string),
 				contentType: toexpand["contentType"].(string),
 				uri:         toexpand["uri"].(string),
@@ -473,17 +494,69 @@ func HandleAsArtefact(dirpath string, name string, content interface{}) (bool, e
 	return false, nil
 }
 
-func ReadArtefact(dirpath string, name string, artefact Artefact) error {
-	if !strings.HasPrefix(artefact.uri, "data:") {
-		return errors.New("Not a data URI")
+// InputPath is where an artefact input is written: named after the input, with
+// the uploaded file's extension, so a command can find it without being told.
+func InputPath(dirpath string, name string, artefact Artefact) string {
+	extension := ""
+	if dot := strings.LastIndex(artefact.name, "."); dot > -1 {
+		extension = artefact.name[dot:]
 	}
-	b64 := strings.SplitN(artefact.uri, ",", 2)[1]
-	raw, err := base64.StdEncoding.DecodeString(b64)
+	return dirpath + "/" + name + extension
+}
+
+// ReadArtefact writes an artefact input to a file.
+//
+// The server sends small ones inline as a data: URI and large ones as a URL to
+// fetch, because a base64 data: URI has to be built whole in memory at both ends
+// of a request that cannot stream or resume. A fetched one is streamed to disk
+// for the same reason, so the size of an input is bounded by the disk rather
+// than by this process.
+func ReadArtefact(dirpath string, token string, name string, artefact Artefact) error {
+	path := InputPath(dirpath, name, artefact)
+	if strings.HasPrefix(artefact.uri, "data:") {
+		b64 := strings.SplitN(artefact.uri, ",", 2)[1]
+		raw, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		log.Println("Writing input file " + path)
+		return errors.WithStack(os.WriteFile(path, raw, os.ModePerm))
+	}
+	if strings.HasPrefix(artefact.uri, "http://") || strings.HasPrefix(artefact.uri, "https://") {
+		log.Println("Downloading input file " + path + " from " + artefact.uri)
+		return errors.WithStack(DownloadArtefact(artefact.uri, token, path))
+	}
+	// A blob: reference means nothing outside the server, and anything else is
+	// not something this agent can resolve either.
+	return errors.New("Cannot read artefact " + artefact.name + " from URI of unsupported form")
+}
+
+// DownloadArtefact streams a URL to a file, authenticating as the task.
+func DownloadArtefact(url string, token string, path string) error {
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	extension := artefact.name[strings.LastIndex(artefact.name, ".")+1:]
-	log.Println("Writing input file " + dirpath + "/" + name + "." + extension)
-	err = os.WriteFile(dirpath+"/"+name+"."+extension, raw, os.ModePerm)
-	return errors.WithStack(err)
+	if len(token) > 0 {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return errors.New("Failed to download " + url + ": " + resp.Status)
+	}
+	out, err := os.Create(path)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer out.Close()
+	written, err := io.Copy(out, resp.Body)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	log.Println("Downloaded " + strconv.FormatInt(written, 10) + " bytes to " + path)
+	return nil
 }
