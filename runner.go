@@ -217,9 +217,19 @@ func RunCalculation(command string, host string, token string, calculation strin
 			strings.TrimSuffix(strings.TrimPrefix(command, "\""), "\""))
 	}
 	cmd.Dir = dirpath
-	cmd.Env = make([]string, 2)
-	cmd.Env[0] = "HOST=" + host
-	cmd.Env[1] = "TOKEN=" + token
+	// Extend the environment rather than replace it. Replacing it leaves the
+	// command with no PATH and, in an image whose runtime is set up by its
+	// entrypoint - a conda environment, a toolchain activation - none of that
+	// setup either, so the command cannot find the very tools the image exists
+	// to provide.
+	cmd.Env = append(os.Environ(),
+		"HOST="+host,
+		"TOKEN="+token,
+		// The calculation the command is running for, so that a long task can
+		// report its own progress to /api/calculations/logs/<id>. Without it the
+		// only progress the server sees is the one this agent sends before the
+		// command starts, and a run of any length looks stalled.
+		"CALCULATION="+calculation)
 
 	// Capture stdout/stderr
 	var stdoutBuf, stderrBuf bytes.Buffer
@@ -276,13 +286,17 @@ func GetContext(host string, token string, calculation string) (CalculationConte
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
 	resp, err := http.DefaultClient.Do(req)
+	// Check the error before the response: a request that failed to go out at
+	// all - no route, TLS refused, host not resolving - returns a nil response,
+	// and reading its status panics instead of reporting what went wrong.
+	if err != nil {
+		return dat, errors.WithStack(err), abort
+	}
+	defer resp.Body.Close()
 	// HTTP code to indicate we already ran the calculation
 	if resp.StatusCode == 208 {
 		abort = true
 		return dat, nil, abort
-	}
-	if err != nil {
-		return dat, errors.WithStack(err), abort
 	}
 	if resp.StatusCode != 200 {
 		return dat, errors.New(resp.Status), abort
@@ -435,10 +449,14 @@ func SendResult(host string, token string, calculation string, response string) 
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		return errors.New(resp.Status)
 	}
-	return errors.WithStack(err)
+	return nil
 }
 
 func MakeArtefact(path string) (string, error) {
